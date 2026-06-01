@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Sentiment Tracker — {{ run_date }}</title>
+</head>
+<body style="margin:0;padding:0;background:#0d1117;color:#e6edf3;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+
+{# ----------------------------- macros (defined first so they exist when called) ----------------------------- #}
+{% macro chg(v) -%}
+  <span style="color:{{ '#3fb950' if (v is not none and v >= 0) else '#f85149' }};font-weight:600;">{{ v|pct }}</span>
+{%- endmacro %}
+
+{% macro tier_badge(t) %}
+  {% set color = {'ACT':'#f85149','WATCH':'#d29922','MONITOR':'#58a6ff','NOISE':'#6e7681'}.get(t.tier,'#6e7681') %}
+  <span style="background:{{ color }};color:#0d1117;font-weight:700;font-size:11px;padding:3px 8px;border-radius:10px;">{{ t.tier }} · {{ t.conviction_score|num }}</span>
+{% endmacro %}
+
+{% macro yahoo(ticker) %}https://finance.yahoo.com/quote/{{ ticker }}{% endmacro %}
+
+{% macro full_card(t) %}
+<div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #f85149;border-radius:8px;padding:16px;margin-bottom:14px;">
+  <table role="presentation" width="100%"><tr>
+    <td><a href="{{ yahoo(t.ticker) }}" style="color:#e6edf3;text-decoration:none;font-size:20px;font-weight:700;">{{ t.ticker }}</a></td>
+    <td style="text-align:right;">{{ tier_badge(t) }}</td>
+  </tr></table>
+
+  <div style="margin-top:10px;font-size:14px;">
+    <strong>{{ t.stock_data.price|money }}</strong>
+    &nbsp; 1d {{ chg(t.stock_data.price_change_1d) }} &nbsp; 5d {{ chg(t.stock_data.price_change_5d) }} &nbsp; 30d {{ chg(t.stock_data.price_change_30d) }}
+  </div>
+
+  <table role="presentation" width="100%" style="margin-top:10px;font-size:12px;color:#8b949e;border-collapse:collapse;">
+    <tr>
+      <td>Vol ratio<br><span style="color:#e6edf3;font-size:13px;">{{ t.stock_data.volume_ratio|num }}×</span></td>
+      <td>Mkt cap<br><span style="color:#e6edf3;font-size:13px;">{{ t.stock_data.market_cap|big }}</span></td>
+      <td>Float<br><span style="color:#e6edf3;font-size:13px;">{{ t.stock_data.float_shares|big }}</span></td>
+      <td>Short<br><span style="color:#e6edf3;font-size:13px;">{{ t.stock_data.short_interest_pct|pct }}</span></td>
+      <td>Mentions<br><span style="color:#e6edf3;font-size:13px;">{{ t.mention_count_24h }} ({{ t.mention_velocity }}×)</span></td>
+    </tr>
+  </table>
+
+  {% if t.risk_flags %}
+  <div style="margin-top:10px;">
+    {% for f in t.risk_flags %}
+    <span style="background:#2d1418;color:#f85149;font-size:11px;padding:2px 7px;border-radius:8px;margin-right:4px;">⚠ {{ f }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if t.top_posts %}
+  <div style="margin-top:12px;font-size:12px;color:#8b949e;">Driving posts:</div>
+  {% for p in t.top_posts %}
+  <div style="margin-top:6px;font-size:13px;">
+    <a href="{{ p.post_url }}" style="color:#58a6ff;text-decoration:none;">▸ {{ p.post_title|truncate(80) }}</a>
+    <div style="color:#8b949e;font-size:11px;margin-left:12px;">
+      r/{{ p.subreddit }} · ▲{{ p.post_score }} · 💬{{ p.comment_count }}{% if p.sentiment_summary %} — {{ p.sentiment_summary }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro compact_card(t) %}
+<div style="background:#161b22;border:1px solid #30363d;border-left:3px solid #d29922;border-radius:8px;padding:12px;margin-bottom:10px;">
+  <table role="presentation" width="100%"><tr>
+    <td>
+      <a href="{{ yahoo(t.ticker) }}" style="color:#e6edf3;text-decoration:none;font-size:16px;font-weight:700;">{{ t.ticker }}</a>
+      <span style="color:#8b949e;font-size:12px;">&nbsp;{{ t.stock_data.price|money }} · 1d {{ chg(t.stock_data.price_change_1d) }} · 5d {{ chg(t.stock_data.price_change_5d) }}</span>
+    </td>
+    <td style="text-align:right;">{{ tier_badge(t) }}</td>
+  </tr></table>
+  <div style="margin-top:6px;font-size:12px;color:#8b949e;">
+    {{ t.mention_count_24h }} mentions ({{ t.mention_velocity }}×) · vol {{ t.stock_data.volume_ratio|num }}×
+    {% if t.top_post_url %} · <a href="{{ t.top_post_url }}" style="color:#58a6ff;">top post</a>{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{# ----------------------------- document ----------------------------- #}
+<div style="max-width:680px;margin:0 auto;padding:16px;">
+
+  <!-- Header -->
+  <div style="padding:20px 0;border-bottom:1px solid #21262d;">
+    <h1 style="margin:0;font-size:22px;">📈 Stock Sentiment Tracker</h1>
+    <p style="margin:6px 0 0;color:#8b949e;font-size:13px;">Daily report · {{ run_date }}</p>
+    <table role="presentation" width="100%" style="margin-top:14px;border-collapse:collapse;">
+      <tr>
+        <td style="text-align:center;padding:8px;background:#161b22;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;">{{ total_scanned }}</div>
+          <div style="font-size:11px;color:#8b949e;">SCANNED</div>
+        </td>
+        <td style="width:8px;"></td>
+        <td style="text-align:center;padding:8px;background:#2d1418;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#f85149;">{{ counts.ACT }}</div>
+          <div style="font-size:11px;color:#8b949e;">ACT</div>
+        </td>
+        <td style="width:8px;"></td>
+        <td style="text-align:center;padding:8px;background:#2b2410;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#d29922;">{{ counts.WATCH }}</div>
+          <div style="font-size:11px;color:#8b949e;">WATCH</div>
+        </td>
+        <td style="width:8px;"></td>
+        <td style="text-align:center;padding:8px;background:#161b22;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#58a6ff;">{{ counts.MONITOR }}</div>
+          <div style="font-size:11px;color:#8b949e;">MONITOR</div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  {% if not act and not watch and not monitor %}
+    <p style="padding:30px 0;text-align:center;color:#8b949e;">No tickers crossed the scoring threshold today.</p>
+  {% endif %}
+
+  <!-- ACT -->
+  {% if act %}
+  <h2 style="margin:28px 0 12px;font-size:16px;color:#f85149;">🚨 ACT</h2>
+  {% for t in act %}{{ full_card(t) }}{% endfor %}
+  {% endif %}
+
+  <!-- WATCH -->
+  {% if watch %}
+  <h2 style="margin:28px 0 12px;font-size:16px;color:#d29922;">👀 WATCH</h2>
+  {% for t in watch %}{{ compact_card(t) }}{% endfor %}
+  {% endif %}
+
+  <!-- MONITOR -->
+  {% if monitor %}
+  <h2 style="margin:28px 0 12px;font-size:16px;color:#58a6ff;">📡 MONITOR</h2>
+  <table role="presentation" width="100%" style="border-collapse:collapse;background:#161b22;border-radius:8px;overflow:hidden;font-size:13px;">
+    <tr style="background:#1c2128;color:#8b949e;text-align:left;">
+      <th style="padding:8px;">Ticker</th><th style="padding:8px;">Score</th>
+      <th style="padding:8px;">Mentions</th><th style="padding:8px;">1d</th>
+      <th style="padding:8px;">5d</th><th style="padding:8px;">30d</th>
+    </tr>
+    {% for t in monitor %}
+    <tr style="border-top:1px solid #21262d;">
+      <td style="padding:8px;font-weight:600;">{{ t.ticker }}</td>
+      <td style="padding:8px;">{{ t.conviction_score|num }}</td>
+      <td style="padding:8px;">{{ t.mention_count_24h }}</td>
+      <td style="padding:8px;">{{ chg(t.stock_data.price_change_1d) }}</td>
+      <td style="padding:8px;">{{ chg(t.stock_data.price_change_5d) }}</td>
+      <td style="padding:8px;">{{ chg(t.stock_data.price_change_30d) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <!-- Footer -->
+  <div style="margin-top:36px;padding-top:16px;border-top:1px solid #21262d;color:#6e7681;font-size:11px;line-height:1.6;">
+    <p><strong>Not investment advice.</strong> This is an automated aggregation of public Reddit sentiment paired with market data for research only. Reddit signal is noisy and frequently wrong. Do your own due diligence.</p>
+    <p>Next scheduled run: {{ next_run }}.</p>
+  </div>
+</div>
+</body>
+</html>

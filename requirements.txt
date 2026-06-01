@@ -1,0 +1,20 @@
+# Reddit API
+praw>=7.7
+
+# Market data
+yfinance>=0.2.40
+
+# Claude API (sentiment analysis)
+anthropic>=0.40
+
+# Data handling
+pandas>=2.2
+
+# HTML report templating
+jinja2>=3.1
+
+# Local .env loading (no-op in CI where real env vars are set)
+python-dotenv>=1.0
+
+# SendGrid email provider (optional; Gmail SMTP uses stdlib smtplib)
+sendgrid>=6.11

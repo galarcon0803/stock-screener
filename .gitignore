@@ -1,0 +1,26 @@
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local DB artifacts (the CI-persisted DB lives in data/, but ignore WAL/journal)
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+
+# Generated reports for local inspection
+out/
+*.html.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
