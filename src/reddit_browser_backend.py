@@ -34,6 +34,13 @@ class RedditBlockedError(RuntimeError):
 # --------------------------------------------------------------------------- #
 # Browser session (one warm browser reused for the whole run)
 # --------------------------------------------------------------------------- #
+def _channel_fallback(preferred: str) -> list[str]:
+    """Ordered channels to try: preferred first, then the rest, chromium last."""
+    order = [preferred] + [c for c in ("msedge", "chrome", "chromium")
+                           if c != preferred]
+    return order
+
+
 class _Session:
     def __init__(self):
         self._pw = None
@@ -44,15 +51,28 @@ class _Session:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        # channel="chrome" uses the installed Chrome (least detectable). Falls
-        # back to bundled chromium if Chrome isn't present.
-        try:
-            self._browser = self._pw.chromium.launch(
-                channel="chrome", headless=config.BROWSER_HEADLESS
-            )
-        except Exception:  # noqa: BLE001
-            log.warning("Installed Chrome not available; using bundled chromium.")
-            self._browser = self._pw.chromium.launch(headless=config.BROWSER_HEADLESS)
+        # Launch the configured channel (default Edge) so we don't share a
+        # process with the user's everyday Chrome. Fall back to other channels,
+        # then bundled chromium. Playwright closes ONLY this instance on exit —
+        # never taskkill a browser by image name.
+        channels = _channel_fallback(config.BROWSER_CHANNEL)
+        last_err = None
+        for ch in channels:
+            try:
+                if ch == "chromium":
+                    self._browser = self._pw.chromium.launch(
+                        headless=config.BROWSER_HEADLESS)
+                else:
+                    self._browser = self._pw.chromium.launch(
+                        channel=ch, headless=config.BROWSER_HEADLESS)
+                log.info("Launched browser channel=%s", ch)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                log.warning("Browser channel '%s' unavailable: %s", ch,
+                            str(exc)[:60])
+        if self._browser is None:
+            raise RuntimeError(f"No usable browser channel: {last_err}")
 
         ctx = self._browser.new_context(user_agent=config.REDDIT_JSON_USER_AGENT)
         self._page = ctx.new_page()
@@ -60,12 +80,19 @@ class _Session:
         return self
 
     def __exit__(self, *exc):
+        # Clean, scoped shutdown of ONLY the instance we launched. Never kill
+        # browsers by image name — that would close the user's other windows.
         try:
             if self._browser:
                 self._browser.close()
+        except Exception as e:  # noqa: BLE001
+            log.warning("browser close failed: %s", str(e)[:60])
         finally:
-            if self._pw:
-                self._pw.stop()
+            try:
+                if self._pw:
+                    self._pw.stop()
+            except Exception as e:  # noqa: BLE001
+                log.warning("playwright stop failed: %s", str(e)[:60])
 
     def _warm_up(self):
         """Visit reddit.com once to clear the anti-bot challenge."""

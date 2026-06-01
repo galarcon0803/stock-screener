@@ -54,8 +54,12 @@ REDDIT_USER_AGENT = env("REDDIT_USER_AGENT", "StockSentimentTracker/1.0")
 #   "praw"    — official OAuth Data API (needs the credentials above). Works from
 #               CI once the Data API request is approved.
 REDDIT_BACKEND = (env("REDDIT_BACKEND", "browser") or "browser").lower()
-# Run Chrome headless? Reddit detects headless more easily, so default False.
+# Run the browser headless? Reddit detects headless more easily, so default False.
 BROWSER_HEADLESS = (env("BROWSER_HEADLESS", "false") or "false").lower() == "true"
+# Which browser Playwright drives. Default "msedge" (Edge) so scraping uses a
+# DIFFERENT browser than your everyday Chrome — closing the scraper's instance
+# never touches your Chrome windows. Options: "msedge" | "chrome" | "chromium".
+BROWSER_CHANNEL = env("BROWSER_CHANNEL", "msedge")
 # Browser-like UA for the json backend (Reddit 403s obvious bot UAs less, but the
 # real gate is IP type). Overridable via env.
 REDDIT_JSON_USER_AGENT = env(
