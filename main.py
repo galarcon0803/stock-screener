@@ -59,10 +59,16 @@ def run(args: argparse.Namespace) -> int:
         if not args.no_outcomes:
             database.update_outcomes(conn)
 
-        # 2. Scrape Reddit (validates tickers against yfinance, cache-first).
-        mentions = reddit_scraper.scrape_all_subreddits(conn)
+        # 2. Obtain mentions: either from a pre-scraped file (the no-API path,
+        #    where local_scrape.py did the residential-IP scrape) or by scraping
+        #    directly here (works with REDDIT_BACKEND=praw, or json on a
+        #    residential IP).
+        if args.from_file:
+            mentions = load_mentions_file(args.from_file)
+        else:
+            mentions = reddit_scraper.scrape_all_subreddits(conn)
         if not mentions:
-            log.warning("No mentions scraped; nothing to do.")
+            log.warning("No mentions available; nothing to do.")
             return 0
 
         # 3. Select tickers above threshold.
@@ -124,6 +130,18 @@ def run(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def load_mentions_file(path: str) -> list[dict]:
+    """Load pre-scraped mentions written by local_scrape.py."""
+    import json
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    mentions = data.get("mentions", data) if isinstance(data, dict) else data
+    log.info("Loaded %d mentions from %s (scraped_at=%s)",
+             len(mentions), path,
+             data.get("scraped_at") if isinstance(data, dict) else "?")
+    return mentions
+
+
 def sentiment_step(mentions: list[dict]) -> list[dict]:
     import sentiment_analyzer
 
@@ -148,6 +166,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Skip Claude sentiment classification (for offline tests).")
     p.add_argument("--limit", type=int, default=None,
                    help="Cap number of tickers scored.")
+    p.add_argument("--from-file", type=str, default=None,
+                   help="Load mentions from a local_scrape.py JSON file instead "
+                        "of scraping (the no-API CI path).")
     return p.parse_args(argv)
 
 

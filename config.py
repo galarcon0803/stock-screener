@@ -45,6 +45,22 @@ REDDIT_CLIENT_ID = env("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = env("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = env("REDDIT_USER_AGENT", "StockSentimentTracker/1.0")
 
+# Which scraping backend to use:
+#   "json" — Reddit's public .json endpoints, no API key. Works only from a
+#            residential IP (datacenter IPs like CI runners get 403'd), so this
+#            is what local_scrape.py uses on your own machine.
+#   "praw" — official OAuth Data API (needs the credentials above). Use once the
+#            Data API request is approved; works from CI.
+REDDIT_BACKEND = (env("REDDIT_BACKEND", "json") or "json").lower()
+# Browser-like UA for the json backend (Reddit 403s obvious bot UAs less, but the
+# real gate is IP type). Overridable via env.
+REDDIT_JSON_USER_AGENT = env(
+    "REDDIT_JSON_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+)
+REDDIT_JSON_SLEEP_SECONDS = 1.5   # politeness delay between .json requests
+
 # Anthropic
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
 

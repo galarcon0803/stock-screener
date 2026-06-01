@@ -1,0 +1,90 @@
+name: Process Scraped Mentions
+
+# No-API path: local_scrape.py runs on a residential IP and pushes a file to
+# data/incoming/. That push triggers this workflow, which runs the rest of the
+# pipeline (market data, Claude sentiment, scoring, email) — none of which is
+# IP-blocked the way Reddit is.
+
+on:
+  push:
+    paths:
+      - 'data/incoming/*.json'
+  workflow_dispatch:
+    inputs:
+      file:
+        description: 'Path to an incoming mentions file (optional; newest if blank)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: process-incoming
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pick the incoming file
+        id: pick
+        shell: bash
+        run: |
+          f="${{ github.event.inputs.file }}"
+          if [ -z "$f" ]; then
+            f=$(ls -t data/incoming/*.json 2>/dev/null | head -n1)
+          fi
+          if [ -z "$f" ] || [ ! -f "$f" ]; then
+            echo "No incoming file found; nothing to process."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Using $f"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "file=$f" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run pipeline from file
+        if: steps.pick.outputs.found == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMAIL_PROVIDER: ${{ secrets.EMAIL_PROVIDER }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+        run: python main.py --from-file "${{ steps.pick.outputs.file }}"
+
+      - name: Commit updated database
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/sentiment.db
+          if git diff --staged --quiet; then
+            echo "No DB changes to commit."
+          else
+            git commit -m "chore: update sentiment.db [skip ci]"
+            git push
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report
+          path: out/*.html
+          if-no-files-found: ignore
+          retention-days: 14

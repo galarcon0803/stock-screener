@@ -72,16 +72,74 @@ All weights, subreddits, thresholds, and the Claude model live in
 
 ---
 
+## Data backends (how Reddit data gets in)
+
+The scraper has a **pluggable backend**, selected by `REDDIT_BACKEND`:
+
+| `REDDIT_BACKEND` | Source | Needs API key? | Runs in CI? |
+|---|---|---|---|
+| `praw` | Official OAuth Data API | Yes (pending approval) | ✅ Yes |
+| `json` *(default)* | Reddit's public `.json` endpoints | No | ❌ **Residential IP only** |
+
+**Why two backends:** Reddit 403-blocks **datacenter IPs** (GitHub Actions, cloud
+hosts) at the network level — regardless of method (`.json`, `.rss`, Redlib, full
+browser headers all fail from CI; verified empirically). The archive services
+(Pushshift/PullPush) are ~a year stale and unusable for a *daily* tracker. So the
+only no-API way to get fresh data is to **scrape from a residential IP**.
+
+### No-API path (default, no Reddit key)
+
+```
+[Your machine, residential IP]            [GitHub Actions]
+ local_scrape.py  (REDDIT_BACKEND=json)
+   scrape .json → extract tickers
+   → data/incoming/mentions_<ts>.json
+   → git commit + push  ───────────────▶  process_incoming.yml triggers
+                                            main.py --from-file <that file>
+                                            → yfinance + Claude + score + email
+```
+
+Run on your machine (daily, while on a home/residential network):
+
+```powershell
+python local_scrape.py --push          # scrape → write file → commit & push (triggers CI)
+python local_scrape.py --run-pipeline  # OR do the whole thing locally, no CI, no keys but Anthropic
+python local_scrape.py                 # just scrape → write file (no push)
+```
+
+Schedule it with Windows Task Scheduler (or cron) once per day. The market-data,
+sentiment, scoring, and email steps are **not** IP-blocked, so they run fine in CI
+([`process_incoming.yml`](.github/workflows/process_incoming.yml)) — only the
+Reddit read has to happen on your IP.
+
+### Official API path (once approved)
+
+Set `REDDIT_BACKEND=praw` + the Reddit secrets, and the scheduled
+[`daily_report.yml`](.github/workflows/daily_report.yml) does everything in CI —
+no local machine needed. The backend swap is the only change; all downstream code
+is identical.
+
+> ⚖️ **ToS note:** unauthenticated `.json` scraping is a gray area even from a
+> residential IP. The official Data API (`praw`) is the only fully-sanctioned
+> route — the `json` backend is a low-volume personal stopgap while approval is
+> pending.
+
+---
+
 ## Project layout
 
 ```
 stock-sentiment-tracker/
-├── .github/workflows/daily_report.yml   # cron + manual trigger
-├── config.py                            # all constants / weights / secrets access
-├── main.py                              # pipeline orchestrator (has CLI flags)
+├── .github/workflows/
+│   ├── daily_report.yml       # API path: scheduled, all-in-CI (REDDIT_BACKEND=praw)
+│   └── process_incoming.yml   # no-API path: runs when a scraped file is pushed
+├── config.py                  # all constants / weights / secrets / REDDIT_BACKEND
+├── main.py                    # pipeline orchestrator (CLI flags incl. --from-file)
+├── local_scrape.py            # residential-IP scraper (no-API path entry point)
 ├── src/
 │   ├── database.py            # SQLite schema + all reads/writes (network-free)
-│   ├── reddit_scraper.py      # PRAW scraping + ticker extraction/validation
+│   ├── reddit_scraper.py      # backend dispatch + ticker extraction/validation
+│   ├── reddit_json_backend.py # no-API .json scraper (residential IP)
 │   ├── stock_fetcher.py       # yfinance market data (retries, caching)
 │   ├── sentiment_analyzer.py  # Claude batched classification (prompt-cached)
 │   ├── scorer.py              # conviction model
@@ -89,6 +147,7 @@ stock-sentiment-tracker/
 │   └── email_sender.py        # Gmail SMTP or SendGrid
 ├── templates/report.html      # dark, mobile-friendly email template
 ├── tests/test_offline.py      # no-network smoke test
+├── data/incoming/             # scraped mention files (no-API path hand-off)
 └── data/sentiment.db          # created on first run; persisted in CI
 ```
 

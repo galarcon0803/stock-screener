@@ -216,15 +216,44 @@ def _scrape_comments(submission, subreddit_name, seen, out) -> None:
             out.append(m)
 
 
-def scrape_all_subreddits(conn=None) -> list[dict]:
-    """Scrape every configured subreddit, validate tickers once each, and
-    return the filtered list of mention dicts."""
+def _gather_raw_praw() -> list[dict]:
     reddit = _get_reddit()
     raw: list[dict] = []
     for name in config.SUBREDDITS:
         weight = config.SUBREDDIT_WEIGHTS.get(name, config.DEFAULT_SUBREDDIT_WEIGHT)
         raw.extend(scrape_subreddit(reddit, name, weight))
+    return raw
 
+
+def _gather_raw_json() -> list[dict]:
+    """Gather raw mentions via the public .json backend (residential IP)."""
+    import reddit_json_backend as backend
+
+    raw: list[dict] = []
+    for name in config.SUBREDDITS:
+        raw.extend(
+            backend.scrape_subreddit_json(
+                name,
+                _sorts_for(name),
+                extract_tickers_from_text,
+                _is_recent,
+                config.CONTENT_SNIPPET_LEN,
+            )
+        )
+    return raw
+
+
+def gather_raw_mentions() -> list[dict]:
+    """Backend-dispatching raw scrape (no ticker validation yet)."""
+    if config.REDDIT_BACKEND == "praw":
+        return _gather_raw_praw()
+    if config.REDDIT_BACKEND == "json":
+        return _gather_raw_json()
+    raise RuntimeError(f"Unknown REDDIT_BACKEND: {config.REDDIT_BACKEND!r}")
+
+
+def validate_and_filter(raw: list[dict], conn=None) -> list[dict]:
+    """Validate each unique ticker once, drop mentions for invalid symbols."""
     log.info("Validating %d candidate mentions", len(raw))
     validity: dict[str, bool] = {}
     kept: list[dict] = []
@@ -234,8 +263,14 @@ def scrape_all_subreddits(conn=None) -> list[dict]:
             validity[t] = is_valid_ticker(t, conn)
         if validity[t]:
             kept.append(m)
-
     valid_count = sum(1 for v in validity.values() if v)
     log.info("Validation: %d/%d unique symbols valid, %d mentions kept",
              valid_count, len(validity), len(kept))
     return kept
+
+
+def scrape_all_subreddits(conn=None) -> list[dict]:
+    """Scrape every configured subreddit (per REDDIT_BACKEND), validate tickers
+    once each, and return the filtered list of mention dicts."""
+    raw = gather_raw_mentions()
+    return validate_and_filter(raw, conn)
