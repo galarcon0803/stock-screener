@@ -9,6 +9,43 @@ HTML report. Designed to run unattended on GitHub Actions.
 
 ---
 
+## Reddit Data API usage (read-only)
+
+This project uses the Reddit Data API strictly for **read-only, non-commercial,
+personal research**, and is a deliberately minimal-footprint API consumer:
+
+- **Read-only.** It only issues read (GET) requests. It performs **no write
+  operations of any kind** — it never posts, comments, votes, messages users,
+  flairs, or moderates. It adds zero spam or interaction load to any community.
+- **Low frequency.** It runs as a scheduled job **once per day** and stays well
+  within the OAuth rate limit (100 QPM).
+- **What it reads.** On each daily run it reads recent public posts (hot / new /
+  top, plus controversial for one subreddit) and their top-level comments from a
+  fixed list of finance/investing subreddits, extracts stock-ticker mentions
+  (e.g. `$NVDA`, `AMD`), and records only lightweight aggregate metadata per
+  mention (subreddit, post ID, score, upvote ratio, comment count, and a short
+  text snippet).
+- **What it does with it.** Mentions are aggregated to gauge which tickers are
+  being discussed and how, paired with **external** stock-market price/volume
+  data (from a financial-data provider, not Reddit) and a sentiment
+  classification step, then summarized into a **private daily email report** for
+  the author. No individual users' content is republished or redistributed
+  publicly. No personal data is collected, profiled, or shared.
+
+**Why the Data API and not Devvit:** the tool needs to read ~14 large public
+finance subreddits the author does not own or moderate (so a per-subreddit Devvit
+install is not possible), and it relies on an off-platform Python stack (pandas,
+an external market-data provider, a third-party LLM API for sentiment, and email
+delivery) that does not fit Devvit's in-platform TypeScript runtime and outbound
+`fetch` allowlist.
+
+**Subreddits used:** r/wallstreetbets, r/stocks, r/stockmarket, r/smallstreetbets,
+r/options, r/optionstrading, r/thetagang, r/daytrading, r/undervaluedstonks,
+r/TheRaceTo10Million, r/biotech_stocks, r/stockstobuytoday, r/wallstreetbetsnew,
+r/optionsmillionaire. *(Authoritative list lives in [`config.py`](config.py).)*
+
+---
+
 ## How it works
 
 ```
