@@ -46,12 +46,16 @@ REDDIT_CLIENT_SECRET = env("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = env("REDDIT_USER_AGENT", "StockSentimentTracker/1.0")
 
 # Which scraping backend to use:
-#   "json" — Reddit's public .json endpoints, no API key. Works only from a
-#            residential IP (datacenter IPs like CI runners get 403'd), so this
-#            is what local_scrape.py uses on your own machine.
-#   "praw" — official OAuth Data API (needs the credentials above). Use once the
-#            Data API request is approved; works from CI.
-REDDIT_BACKEND = (env("REDDIT_BACKEND", "json") or "json").lower()
+#   "browser" — drives a real Chrome via Playwright. Beats Reddit's anti-bot
+#               wall that now 403s plain HTTP clients. No API key. Local only.
+#               THIS IS THE WORKING NO-API DEFAULT.
+#   "json"    — raw .json via urllib. Lighter, but Reddit currently 403s it
+#               (bot detection), so it usually fails. Kept for when/if that eases.
+#   "praw"    — official OAuth Data API (needs the credentials above). Works from
+#               CI once the Data API request is approved.
+REDDIT_BACKEND = (env("REDDIT_BACKEND", "browser") or "browser").lower()
+# Run Chrome headless? Reddit detects headless more easily, so default False.
+BROWSER_HEADLESS = (env("BROWSER_HEADLESS", "false") or "false").lower() == "true"
 # Browser-like UA for the json backend (Reddit 403s obvious bot UAs less, but the
 # real gate is IP type). Overridable via env.
 REDDIT_JSON_USER_AGENT = env(
@@ -59,7 +63,16 @@ REDDIT_JSON_USER_AGENT = env(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 )
-REDDIT_JSON_SLEEP_SECONDS = 1.5   # politeness delay between .json requests
+REDDIT_JSON_SLEEP_SECONDS = 3.0   # base delay between Reddit requests (anti-429)
+
+# Rate-limit handling for the browser/json backends. Reddit 429s aggressively
+# when comment fetches fire back-to-back, so we throttle and back off.
+REDDIT_REQUEST_DELAY = 3.0        # seconds between every Reddit request
+REDDIT_429_BACKOFF = 30.0         # seconds to wait after a 429 before retrying
+REDDIT_429_MAX_RETRIES = 3        # retries per request on 429 before giving up
+REDDIT_MAX_COMMENT_FETCHES = 15   # cap comment-page fetches PER SUBREDDIT (the
+                                  # main 429 driver); top posts are fetched first
+REDDIT_PAUSE_BETWEEN_SUBS = 5.0   # extra pause between subreddits
 
 # Anthropic
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
@@ -163,9 +176,11 @@ TICKER_BLACKLIST = {
     "IRA", "401K", "HODL", "WSJ", "CNBC", "NYSE", "OTC", "GMI", "NGMI",
 }
 
-# $TICKER form (highest confidence) and bare uppercase 1-5 letter tokens.
+# $TICKER form (highest confidence) accepts 1-5 chars (e.g. $F, $T).
+# Bare uppercase tokens require 2-5 chars: single letters (I, A, S, P, X, U, T)
+# are almost always English/noise, not tickers, so we don't trust them un-cashtagged.
 TICKER_CASHTAG_RE = r"\$([A-Za-z]{1,5})\b"
-TICKER_BARE_RE = r"\b([A-Z]{1,5})\b"
+TICKER_BARE_RE = r"\b([A-Z]{2,5})\b"
 
 
 # --------------------------------------------------------------------------- #

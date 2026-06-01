@@ -267,6 +267,18 @@ def get_cached_ticker_validity(conn, ticker: str) -> bool | None:
     return None if row is None else bool(row["is_valid"])
 
 
+def get_seen_post_ids(conn, days: int = 7) -> set[str]:
+    """Post IDs already captured recently, so re-runs skip them (saves requests
+    and avoids double-counting). Bounded to a trailing window so the set stays
+    small and very old posts could in principle be re-seen."""
+    since = (date.today() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT DISTINCT post_id FROM reddit_mentions WHERE date(captured_at) >= ?",
+        (since,),
+    ).fetchall()
+    return {r["post_id"] for r in rows}
+
+
 def get_historical_mention_avg(conn, ticker: str, days: int = 7) -> float:
     """Average daily mention count over the trailing `days` (excluding today)."""
     since = (date.today() - timedelta(days=days)).isoformat()

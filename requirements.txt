@@ -18,3 +18,9 @@ python-dotenv>=1.0
 
 # SendGrid email provider (optional; Gmail SMTP uses stdlib smtplib)
 sendgrid>=6.11
+
+# Browser-driven Reddit backend (REDDIT_BACKEND=browser) — beats Reddit's
+# anti-bot wall that 403s plain HTTP clients. After install, run once:
+#   playwright install chromium
+# Not needed in CI when REDDIT_BACKEND=praw (official API).
+playwright>=1.40

@@ -50,7 +50,7 @@ def get_current_price(ticker: str) -> float | None:
     for attempt in range(config.YF_MAX_RETRIES):
         try:
             fast = yf.Ticker(ticker).fast_info
-            price = fast.get("last_price") if hasattr(fast, "get") else None
+            price = getattr(fast, "last_price", None)
             if price:
                 return float(price)
         except Exception as exc:  # noqa: BLE001

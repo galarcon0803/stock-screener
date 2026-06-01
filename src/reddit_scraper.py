@@ -97,13 +97,26 @@ def is_valid_ticker(ticker: str, conn=None) -> bool:
     return valid
 
 
+def _fast_price(yt) -> float | None:
+    """Robustly read last price from yfinance fast_info (attr, not .get())."""
+    try:
+        fi = yt.fast_info
+        price = getattr(fi, "last_price", None)
+        if price is None and hasattr(fi, "get"):
+            price = fi.get("lastPrice")
+        return float(price) if price else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _yf_symbol_exists(ticker: str) -> bool:
     try:
         import yfinance as yf
 
         time.sleep(config.YF_SLEEP_SECONDS)  # politeness on cache-miss path
-        fast = yf.Ticker(ticker).fast_info
-        price = fast.get("last_price") if hasattr(fast, "get") else None
+        # NB: fast_info.get('last_price') returns None in current yfinance;
+        # the attribute access is the reliable path.
+        price = _fast_price(yf.Ticker(ticker))
         return price is not None and price > 0
     except Exception:  # noqa: BLE001 - any failure means "treat as invalid"
         return False
@@ -243,12 +256,44 @@ def _gather_raw_json() -> list[dict]:
     return raw
 
 
-def gather_raw_mentions() -> list[dict]:
-    """Backend-dispatching raw scrape (no ticker validation yet)."""
+def _gather_raw_browser(seen_post_ids: set[str] | None = None) -> list[dict]:
+    """Gather raw mentions by driving a real Chrome (beats the anti-bot wall)."""
+    import reddit_browser_backend as backend
+
+    return backend.scrape_all_browser(
+        config.SUBREDDITS,
+        _sorts_for,
+        extract_tickers_from_text,
+        _is_recent,
+        config.CONTENT_SNIPPET_LEN,
+        seen_post_ids=seen_post_ids or set(),
+    )
+
+
+def gather_raw_mentions(conn=None) -> list[dict]:
+    """Backend-dispatching raw scrape (no ticker validation yet).
+
+    When a DB connection is given, posts already captured in the recent window
+    are skipped so re-runs don't re-pull or double-count them (and we issue
+    fewer requests, easing rate limits)."""
+    seen_post_ids: set[str] = set()
+    if conn is not None:
+        try:
+            import database
+
+            seen_post_ids = database.get_seen_post_ids(conn)
+            if seen_post_ids:
+                log.info("Skipping %d already-seen posts from recent runs",
+                         len(seen_post_ids))
+        except Exception:  # noqa: BLE001
+            seen_post_ids = set()
+
     if config.REDDIT_BACKEND == "praw":
         return _gather_raw_praw()
     if config.REDDIT_BACKEND == "json":
         return _gather_raw_json()
+    if config.REDDIT_BACKEND == "browser":
+        return _gather_raw_browser(seen_post_ids)
     raise RuntimeError(f"Unknown REDDIT_BACKEND: {config.REDDIT_BACKEND!r}")
 
 
@@ -272,5 +317,5 @@ def validate_and_filter(raw: list[dict], conn=None) -> list[dict]:
 def scrape_all_subreddits(conn=None) -> list[dict]:
     """Scrape every configured subreddit (per REDDIT_BACKEND), validate tickers
     once each, and return the filtered list of mention dicts."""
-    raw = gather_raw_mentions()
+    raw = gather_raw_mentions(conn)
     return validate_and_filter(raw, conn)

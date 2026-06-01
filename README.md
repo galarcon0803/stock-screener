@@ -78,28 +78,40 @@ The scraper has a **pluggable backend**, selected by `REDDIT_BACKEND`:
 
 | `REDDIT_BACKEND` | Source | Needs API key? | Runs in CI? |
 |---|---|---|---|
+| `browser` *(default)* | Real Chrome via Playwright | No | ❌ Local only |
+| `json` | Reddit public `.json` via urllib | No | ❌ (usually 403s) |
 | `praw` | Official OAuth Data API | Yes (pending approval) | ✅ Yes |
-| `json` *(default)* | Reddit's public `.json` endpoints | No | ❌ **Residential IP only** |
 
-**Why two backends:** Reddit 403-blocks **datacenter IPs** (GitHub Actions, cloud
-hosts) at the network level — regardless of method (`.json`, `.rss`, Redlib, full
-browser headers all fail from CI; verified empirically). The archive services
-(Pushshift/PullPush) are ~a year stale and unusable for a *daily* tracker. So the
-only no-API way to get fresh data is to **scrape from a residential IP**.
+**Why a browser backend:** Reddit now bot-blocks **plain HTTP clients** —
+`urllib`, `requests`, `.rss`, public Redlib instances, and even headless browsers
+all get a 403 *"network security"* page, regardless of IP or User-Agent (verified
+empirically; institutional networks like university wifi are blocked too, but so
+is a clean residential cellular IP — the block is on the *client*, not the IP).
+Archive services (Pushshift/PullPush) are ~a year stale and useless for a *daily*
+tracker. The one no-API method that works: **drive a real, non-headless Chrome**,
+load reddit.com once to clear the bot challenge, then read `.json` in that browser
+context. That's the `browser` backend.
+
+One-time setup:
+
+```powershell
+pip install -r requirements.txt
+playwright install chromium     # (browser backend uses your installed Chrome if present)
+```
 
 ### No-API path (default, no Reddit key)
 
 ```
-[Your machine, residential IP]            [GitHub Actions]
- local_scrape.py  (REDDIT_BACKEND=json)
-   scrape .json → extract tickers
+[Your machine]                            [GitHub Actions]
+ local_scrape.py  (REDDIT_BACKEND=browser)
+   real Chrome → .json → extract tickers
    → data/incoming/mentions_<ts>.json
    → git commit + push  ───────────────▶  process_incoming.yml triggers
                                             main.py --from-file <that file>
                                             → yfinance + Claude + score + email
 ```
 
-Run on your machine (daily, while on a home/residential network):
+Run on your machine (daily):
 
 ```powershell
 python local_scrape.py --push          # scrape → write file → commit & push (triggers CI)
