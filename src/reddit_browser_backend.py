@@ -94,23 +94,46 @@ class _Session:
             except Exception as e:  # noqa: BLE001
                 log.warning("playwright stop failed: %s", str(e)[:60])
 
-    def _warm_up(self):
-        """Visit reddit.com once to clear the anti-bot challenge."""
-        self._page.goto("https://www.reddit.com/", timeout=45000)
-        self._page.wait_for_timeout(2500)
-        title = (self._page.title() or "").lower()
-        if "blocked" in title or "network security" in title:
+    def _warm_up(self, raise_on_fail: bool = True) -> bool:
+        """Visit reddit.com to clear the anti-bot challenge. Returns True on
+        success. The cleared cookie expires after a few minutes, so this is also
+        called mid-run to re-clear when a fetch starts getting blocked."""
+        try:
+            self._page.goto("https://www.reddit.com/", timeout=45000)
+            self._page.wait_for_timeout(2500)
+            title = (self._page.title() or "").lower()
+            ok = "blocked" not in title and "network security" not in title
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            log.debug("warm-up navigation error: %s", str(exc)[:60])
+        if ok:
+            log.info("Browser warm-up OK (%s)", self._page.title()[:40])
+            return True
+        if raise_on_fail:
             raise RedditBlockedError("Bot challenge not cleared on warm-up.")
-        log.info("Browser warm-up OK (%s)", self._page.title()[:40])
+        log.warning("Re-warm failed (still challenged).")
+        return False
 
     def get_json(self, url: str):
-        """Fetch a Reddit .json URL with 429 backoff+retry. Returns parsed JSON,
-        or None on non-recoverable non-200. Raises RedditBlockedError on 403."""
+        """Fetch a Reddit .json URL. Handles 429 (backoff) and 403/block (the
+        anti-bot cookie expired mid-run -> re-warm and retry). Returns parsed
+        JSON, or None if it can't be fetched after retries."""
+        rewarmed = False
         for attempt in range(config.REDDIT_429_MAX_RETRIES + 1):
             status, body, err = self._navigate(url)
+            blocked = status == 403 or (err and "403" in err)
 
-            if status == 403 or (err and "403" in err):
-                raise RedditBlockedError(f"403 for {url} (challenge re-triggered).")
+            if blocked:
+                # The warm-up cookie expires after a few minutes; re-clear the
+                # challenge once and retry rather than aborting the whole run.
+                if not rewarmed:
+                    log.warning("403 on r/%s — cookie expired, re-warming session",
+                                url.split('/r/')[-1].split('/')[0])
+                    time.sleep(config.REDDIT_REQUEST_DELAY)
+                    if self._warm_up(raise_on_fail=False):
+                        rewarmed = True
+                        continue
+                raise RedditBlockedError(f"403 for {url} after re-warm attempt.")
 
             if status == 429:
                 if attempt < config.REDDIT_429_MAX_RETRIES:
@@ -124,10 +147,10 @@ class _Session:
                 return None
 
             if status != 200:
-                if err:
-                    log.debug("goto failed for %s: %s", url, err[:80])
-                else:
-                    log.warning("%s -> HTTP %s", url, status)
+                # Promoted from debug to warning so silent failures are visible.
+                log.warning("fetch failed (%s) for r/%s: %s", status or "err",
+                            url.split('/r/')[-1].split('/')[0],
+                            (err or '')[:60])
                 return None
 
             time.sleep(config.REDDIT_REQUEST_DELAY)
