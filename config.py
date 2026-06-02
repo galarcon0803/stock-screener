@@ -15,7 +15,9 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # override=True so values in .env win over pre-existing (possibly empty)
+    # shell vars — e.g. an empty ANTHROPIC_API_KEY exported in the environment.
+    load_dotenv(override=True)
 except ImportError:  # python-dotenv not installed; rely on real env vars.
     pass
 
@@ -100,6 +102,23 @@ CLAUDE_MODEL = env("CLAUDE_MODEL", "claude-sonnet-4-6")
 SENTIMENT_BATCH_SIZE = 20          # mentions per Claude API call
 SENTIMENT_MAX_TOKENS = 4096
 
+# USD per million tokens, for run-cost reporting. Keyed by a substring of the
+# model name. Update if Anthropic pricing changes. (cache_write/read approximated
+# from standard 1.25x / 0.1x multipliers on input.)
+CLAUDE_PRICING = {
+    "sonnet": {"input": 3.0, "output": 15.0, "cache_write": 3.75, "cache_read": 0.30},
+    "haiku":  {"input": 0.80, "output": 4.0, "cache_write": 1.0, "cache_read": 0.08},
+    "opus":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
+}
+
+
+def model_pricing(model: str = CLAUDE_MODEL) -> dict:
+    """Return the per-million-token pricing dict for the configured model."""
+    for key, prices in CLAUDE_PRICING.items():
+        if key in model.lower():
+            return prices
+    return CLAUDE_PRICING["sonnet"]  # safe default
+
 # Sentiment label -> base score used in signal aggregation.
 SENTIMENT_SCORES = {
     "bullish_dd": 1.0,
@@ -178,6 +197,19 @@ TICKER_BLACKLIST = {
     "PUT", "PUTS", "CALLS", "BUY", "SELL", "HOLD", "MOON", "BTW", "GG",
     "RIP", "YTD", "QOQ", "YOY", "ROI", "PSA", "ELI", "AMA", "TA", "RH",
     "IRA", "401K", "HODL", "WSJ", "CNBC", "NYSE", "OTC", "GMI", "NGMI",
+    # Added after the 2026-06-01 live run surfaced these as false positives.
+    # Common acronyms / words that happen to be valid yfinance symbols:
+    "NASA",   # people typing NASA, not the leveraged ETF
+    "DRAM",   # memory tech term, not the ticker
+    "FCF",    # "free cash flow"
+    "UP",     # the word "up"
+    "ELON", "EOY", "EOM", "DCA", "ATM", "GTC", "AH", "PM", "RE",
+    "IV", "OI", "PT", "FY", "YE", "WL",
+    "IIRC", "AFAIK", "IMHO", "FUD", "BS", "OK", "NO", "YES", "IDK",
+    "GUH", "FOMC", "DJIA",
+    # Broad-market index/benchmark ETFs — valid tickers but noise for a
+    # single-name discussion tracker (the whole sub talks about "SPY"/"the market"):
+    "SPY", "VOO", "VTI", "IWM", "DIA",
 }
 
 # $TICKER form (highest confidence) accepts 1-5 chars (e.g. $F, $T).

@@ -51,10 +51,13 @@ def analyze_batch(mentions: list[dict]) -> list[dict]:
         return mentions
 
     client = _get_client()
+    usage = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}
     for start in range(0, len(mentions), config.SENTIMENT_BATCH_SIZE):
         batch = mentions[start : start + config.SENTIMENT_BATCH_SIZE]
         try:
-            results = _classify(client, batch)
+            results, batch_usage = _classify(client, batch)
+            for k in usage:
+                usage[k] += batch_usage.get(k, 0)
         except Exception as exc:  # noqa: BLE001
             log.warning("Sentiment batch %d failed (%s); using neutral fallback",
                         start // config.SENTIMENT_BATCH_SIZE, exc)
@@ -62,7 +65,26 @@ def analyze_batch(mentions: list[dict]) -> list[dict]:
         _apply(batch, results)
     labeled = sum(1 for m in mentions if m.get("sentiment_label"))
     log.info("Sentiment applied to %d/%d mentions", labeled, len(mentions))
+    _log_cost(usage, labeled)
     return mentions
+
+
+def _log_cost(usage: dict, n_mentions: int) -> None:
+    """Log actual token usage and USD cost for this run."""
+    p = config.model_pricing()
+    cost = (
+        usage["input"] * p["input"]
+        + usage["output"] * p["output"]
+        + usage["cache_write"] * p["cache_write"]
+        + usage["cache_read"] * p["cache_read"]
+    ) / 1_000_000
+    per = (cost / n_mentions) if n_mentions else 0.0
+    log.info(
+        "Claude usage — in:%d out:%d cache_w:%d cache_r:%d | cost=$%.4f (%s) "
+        "| $%.5f/mention",
+        usage["input"], usage["output"], usage["cache_write"],
+        usage["cache_read"], cost, config.CLAUDE_MODEL, per,
+    )
 
 
 def build_sentiment_prompt(mentions: list[dict]) -> str:
@@ -94,7 +116,7 @@ def _get_client():
     return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
-def _classify(client, batch: list[dict]) -> dict[int, dict]:
+def _classify(client, batch: list[dict]) -> tuple[dict[int, dict], dict]:
     resp = client.messages.create(
         model=config.CLAUDE_MODEL,
         max_tokens=config.SENTIMENT_MAX_TOKENS,
@@ -110,7 +132,21 @@ def _classify(client, batch: list[dict]) -> dict[int, dict]:
     )
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
     parsed = _parse_json_array(text)
-    return {int(item["id"]): item for item in parsed if "id" in item}
+    results = {int(item["id"]): item for item in parsed if "id" in item}
+    return results, _extract_usage(resp)
+
+
+def _extract_usage(resp) -> dict:
+    """Pull token counts from the API response usage block."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return {}
+    return {
+        "input": getattr(u, "input_tokens", 0) or 0,
+        "output": getattr(u, "output_tokens", 0) or 0,
+        "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
+        "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+    }
 
 
 def _apply(batch: list[dict], results: dict[int, dict]) -> None:
