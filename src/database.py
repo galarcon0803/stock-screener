@@ -422,3 +422,160 @@ def _pct(base: float, current: float) -> float | None:
     if not base:
         return None
     return round((current - base) / base * 100, 2)
+
+
+# --------------------------------------------------------------------------- #
+# Analytics / dashboard queries (history-aware)
+# --------------------------------------------------------------------------- #
+def get_all_score_dates(conn) -> list[str]:
+    """Every date we have scores for, newest first."""
+    rows = conn.execute(
+        "SELECT DISTINCT score_date FROM ticker_scores ORDER BY score_date DESC"
+    ).fetchall()
+    return [r["score_date"] for r in rows]
+
+
+def get_latest_scores_with_trend(conn, day: str | None = None) -> list[dict]:
+    """Latest-day scores joined with that day's snapshot, PLUS each ticker's
+    prior-day conviction and how many days it has appeared. This is what makes
+    the dashboard useful: momentum (rising/cooling) and persistence, not just a
+    static snapshot."""
+    if day is None:
+        dates = get_all_score_dates(conn)
+        if not dates:
+            return []
+        day = dates[0]
+
+    rows = conn.execute(
+        """
+        SELECT s.*, snap.price, snap.price_change_1d, snap.price_change_5d,
+               snap.price_change_30d, snap.volume_ratio, snap.market_cap,
+               snap.short_interest_pct, snap.distance_from_52w_high
+        FROM ticker_scores s
+        LEFT JOIN stock_snapshots snap
+               ON snap.ticker = s.ticker AND snap.snapshot_date = s.score_date
+        WHERE s.score_date = ?
+        ORDER BY s.conviction_score DESC
+        """,
+        (day,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        # Prior appearance (any earlier date) for momentum + days-tracked.
+        prior = conn.execute(
+            """SELECT conviction_score, score_date FROM ticker_scores
+               WHERE ticker = ? AND score_date < ?
+               ORDER BY score_date DESC LIMIT 1""",
+            (d["ticker"], day),
+        ).fetchone()
+        appearances = conn.execute(
+            "SELECT COUNT(*) n FROM ticker_scores WHERE ticker = ?",
+            (d["ticker"],),
+        ).fetchone()["n"]
+        d["prev_conviction"] = prior["conviction_score"] if prior else None
+        d["conviction_delta"] = (
+            round(d["conviction_score"] - prior["conviction_score"], 1)
+            if prior else None
+        )
+        d["is_new"] = prior is None
+        d["days_tracked"] = appearances
+        # Sentiment mix for this ticker (lifetime).
+        d["sentiment_mix"] = _sentiment_mix_for(conn, d["ticker"])
+        out.append(d)
+    return out
+
+
+def _sentiment_mix_for(conn, ticker: str) -> dict:
+    rows = conn.execute(
+        """SELECT sentiment_label, COUNT(*) n FROM reddit_mentions
+           WHERE ticker = ? AND sentiment_label IS NOT NULL
+           GROUP BY sentiment_label""",
+        (ticker,),
+    ).fetchall()
+    return {r["sentiment_label"]: r["n"] for r in rows}
+
+
+def get_ticker_history(conn, ticker: str) -> dict:
+    """Full per-ticker history for a detail view: score timeline, price
+    snapshots, recent mentions, and realized outcomes."""
+    scores = [dict(r) for r in conn.execute(
+        """SELECT score_date, conviction_score, signal_score, opportunity_score,
+                  trend_bonus, tier, mention_count_24h
+           FROM ticker_scores WHERE ticker = ? ORDER BY score_date""",
+        (ticker,),
+    ).fetchall()]
+    snaps = [dict(r) for r in conn.execute(
+        """SELECT snapshot_date, price, price_change_1d, volume_ratio
+           FROM stock_snapshots WHERE ticker = ? ORDER BY snapshot_date""",
+        (ticker,),
+    ).fetchall()]
+    mentions = [dict(r) for r in conn.execute(
+        """SELECT subreddit, post_title, post_url, post_score, sentiment_label,
+                  sentiment_summary, captured_at
+           FROM reddit_mentions WHERE ticker = ?
+           ORDER BY post_score DESC LIMIT 15""",
+        (ticker,),
+    ).fetchall()]
+    outcomes = get_ticker_outcome_history(conn, ticker)
+    return {"ticker": ticker, "scores": scores, "snapshots": snaps,
+            "top_mentions": mentions, "outcomes": outcomes}
+
+
+def get_model_performance(conn) -> dict:
+    """Did the model's signals actually pay off? Aggregates realized outcomes
+    (backfilled 5d/30d returns) so the dashboard can show a real track record."""
+    rows = conn.execute(
+        """SELECT conviction_score_at_signal AS conv, return_5d, return_30d
+           FROM ticker_outcomes WHERE return_5d IS NOT NULL"""
+    ).fetchall()
+    realized = [dict(r) for r in rows]
+    n = len(realized)
+    perf = {"n_signals": n, "n_pending": 0, "avg_return_5d": None,
+            "avg_return_30d": None, "win_rate_5d": None, "by_tier": {}}
+    pend = conn.execute(
+        "SELECT COUNT(*) n FROM ticker_outcomes WHERE return_5d IS NULL"
+    ).fetchone()
+    perf["n_pending"] = pend["n"] if pend else 0
+    if n:
+        r5 = [r["return_5d"] for r in realized if r["return_5d"] is not None]
+        r30 = [r["return_30d"] for r in realized if r["return_30d"] is not None]
+        perf["avg_return_5d"] = round(sum(r5) / len(r5), 2) if r5 else None
+        perf["avg_return_30d"] = round(sum(r30) / len(r30), 2) if r30 else None
+        wins = sum(1 for v in r5 if v > 0)
+        perf["win_rate_5d"] = round(wins / len(r5) * 100, 1) if r5 else None
+    return perf
+
+
+def get_trending_tickers(conn, limit: int = 8) -> list[dict]:
+    """Biggest conviction risers vs their previous appearance (momentum)."""
+    dates = get_all_score_dates(conn)
+    if len(dates) < 2:
+        return []
+    today, prev = dates[0], dates[1]
+    rows = conn.execute(
+        """SELECT t.ticker, t.conviction_score AS now_c, p.conviction_score AS prev_c
+           FROM ticker_scores t
+           JOIN ticker_scores p ON p.ticker = t.ticker AND p.score_date = ?
+           WHERE t.score_date = ?""",
+        (prev, today),
+    ).fetchall()
+    movers = [{"ticker": r["ticker"],
+               "delta": round(r["now_c"] - r["prev_c"], 1),
+               "now": r["now_c"]} for r in rows]
+    movers.sort(key=lambda m: m["delta"], reverse=True)
+    return movers[:limit]
+
+
+def get_db_stats(conn) -> dict:
+    """High-level coverage stats for the dashboard header."""
+    def one(q):
+        return conn.execute(q).fetchone()[0]
+    return {
+        "total_mentions": one("SELECT COUNT(*) FROM reddit_mentions"),
+        "total_scores": one("SELECT COUNT(*) FROM ticker_scores"),
+        "distinct_tickers": one("SELECT COUNT(DISTINCT ticker) FROM ticker_scores"),
+        "days_of_data": one("SELECT COUNT(DISTINCT score_date) FROM ticker_scores"),
+        "first_date": one("SELECT MIN(score_date) FROM ticker_scores"),
+        "last_date": one("SELECT MAX(score_date) FROM ticker_scores"),
+    }
