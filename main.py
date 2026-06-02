@@ -52,6 +52,8 @@ def select_tickers(mentions: list[dict], limit: int | None = None) -> list[str]:
 
 def run(args: argparse.Namespace) -> int:
     today = date.today().isoformat()
+    if getattr(args, "preset", None):
+        _apply_preset(args.preset)
     conn = database.init_db(config.DB_PATH)
 
     try:
@@ -169,7 +171,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--from-file", type=str, default=None,
                    help="Load mentions from a local_scrape.py JSON file instead "
                         "of scraping (the no-API CI path).")
+    p.add_argument("--preset", choices=["quick", "full"], default=None,
+                   help="quick = 4 biggest subs/2 sorts (fast); full = all subs.")
     return p.parse_args(argv)
+
+
+# Quick preset: the highest-signal subs + fewer sorts, for fast/cheap runs.
+_QUICK_SUBS = ["wallstreetbets", "stocks", "smallstreetbets", "options"]
+
+
+def _apply_preset(name: str) -> None:
+    if name == "quick":
+        config.SUBREDDITS = _QUICK_SUBS
+        config.DEFAULT_SORTS = ("hot", "new")
+        config.POSTS_PER_SUBREDDIT = 40
+        log.info("Preset 'quick': %d subs, sorts=%s", len(config.SUBREDDITS),
+                 config.DEFAULT_SORTS)
+    elif name == "full":
+        log.info("Preset 'full': all %d subs", len(config.SUBREDDITS))
 
 
 def main() -> int:

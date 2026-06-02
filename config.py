@@ -207,6 +207,13 @@ TICKER_BLACKLIST = {
     "IV", "OI", "PT", "FY", "YE", "WL",
     "IIRC", "AFAIK", "IMHO", "FUD", "BS", "OK", "NO", "YES", "IDK",
     "GUH", "FOMC", "DJIA",
+    # Added after the full 14-sub run surfaced these English words as tickers.
+    # NOTE: deliberately NOT blacklisting OPEN (Opendoor) — a real meme stock.
+    "BACK", "GO", "PC", "LINE", "PUMP", "BC", "JUST", "NEED", "SETUP",
+    "FACTS", "BTC", "ETH", "GROW", "PLAY", "PEAK", "REAL", "STEP",
+    "TITLE", "LOVE", "HOPE", "CASH", "RIDE", "WELL", "FAST", "HUGE",
+    "BIG", "LOW", "HIGH", "NICE", "GAIN", "LOSS", "RISK", "CARE", "HELP",
+    "TIME", "WORK", "LIFE", "FREE", "SAFE", "BEST", "GOOD", "BOLD", "FORM",
     # Broad-market index/benchmark ETFs — valid tickers but noise for a
     # single-name discussion tracker (the whole sub talks about "SPY"/"the market"):
     "SPY", "VOO", "VTI", "IWM", "DIA",

@@ -27,3 +27,6 @@ out/
 
 # Claude Code local state
 .claude/
+
+# Local working DB (regenerated each run; not committed)
+data/sentiment.db
